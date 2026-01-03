@@ -66,3 +66,7 @@ uv run main.py --agent=tomasengine
 ---
 
 **🧠 TOMAS Engine - Where AI meets human cognition for the [ARC-AGI-3 Challenge](https://three.arcprize.org/)**
+
+
+
+I pretty much want to modify this to not use Google Gemini API, but rather to use OpenAI API, and use responses. I'd like to see about modifying our current Arc3 playground to use this. 
