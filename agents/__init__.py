@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from .agent import Agent, Playback
 from .recorder import Recorder
 from .swarm import Swarm
-from .templates.llm_agents import LLM, FastLLM, GuidedLLM, ReasoningLLM
+from .templates.llm_agents import LLM, FastLLM, GPT5Nano, GuidedLLM, ReasoningLLM
 from .templates.random_agent import Random
 from .templates.reasoning_agent import ReasoningAgent
 from .templates.smolagents import SmolCodingAgent, SmolVisionAgent
@@ -32,6 +32,7 @@ __all__ = [
     "Random",
     "LLM",
     "FastLLM",
+    "GPT5Nano",
     "ReasoningLLM",
     "GuidedLLM",
     "ReasoningAgent",

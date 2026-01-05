@@ -145,22 +145,77 @@ class LLM(Agent):
         message5 = None
 
         if self.MODEL_REQUIRES_TOOLS:
-            logger.info("Sending to Assistant for action...")
+            logger.info("Sending to Assistant for action (with tools)...")
             try:
-                create_kwargs = {
-                    "model": self.MODEL,
-                    "messages": self.messages,
-                    "tools": tools,
-                    "tool_choice": "required",
-                }
-                if self.REASONING_EFFORT is not None:
-                    create_kwargs["reasoning_effort"] = self.REASONING_EFFORT
-                response = client.chat.completions.create(**create_kwargs)
+                if self.MODEL.startswith("gpt-5"):
+                    # Responses API pattern for gpt-5
+                    input_content = self.messages[-1]["content"] if self.messages else ""
+                    system_prompt = next((m["content"] for m in self.messages if m["role"] == "system"), None)
+                    if system_prompt:
+                        input_content = f"System: {system_prompt}\n\nUser: {input_content}"
+                    
+                    responses_params = {
+                        "model": self.MODEL,
+                        "input": input_content,
+                        "temperature": 1.0, # gpt-5 typically requires 1.0
+                        "reasoning_effort": self.REASONING_EFFORT or "minimal",
+                        "max_completion_tokens": 2048,
+                        "response_format": {
+                            "type": "tool_calls",
+                            "tools": tools,
+                            "tool_choice": "required",
+                        }
+                    }
+                    response = client.responses.create(**responses_params)
+                    
+                    # Extract tool calls safely
+                    tool_calls_data = []
+                    if hasattr(response.output, 'tool_calls') and response.output.tool_calls:
+                        for tc in response.output.tool_calls:
+                            tool_calls_data.append({
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments
+                                }
+                            })
+                    
+                    usage_tokens = getattr(response.usage, "total_tokens", 0)
+                    # Create a message dict that matches the 'assistant' role structure
+                    message5_dict = {
+                        "role": "assistant",
+                        "tool_calls": tool_calls_data
+                    }
+                    # We also need an object-like interface for the legacy code below (name, arguments)
+                    message5 = type('obj', (object,), {
+                        'tool_calls': [type('tc', (object,), {
+                            'id': tc['id'],
+                            'function': type('fn', (object,), tc['function'])
+                        }) for tc in tool_calls_data],
+                        'content': None
+                    })
+                    # Override push_message target for this turn
+                    self.push_message(message5_dict)
+                    message5 = None # Already pushed, prevent double push at line 207
+                else:
+                    create_kwargs = {
+                        "model": self.MODEL,
+                        "messages": self.messages,
+                        "tools": tools,
+                        "tool_choice": "required",
+                    }
+                    if self.REASONING_EFFORT is not None:
+                        create_kwargs["reasoning_effort"] = self.REASONING_EFFORT
+                    response = client.chat.completions.create(**create_kwargs)
+                    usage_tokens = response.usage.total_tokens
+                    message5 = response.choices[0].message
+
             except openai.BadRequestError as e:
                 logger.info(f"Message dump: {self.messages}")
                 raise e
-            self.track_tokens(response.usage.total_tokens)
-            message5 = response.choices[0].message
+
+            self.track_tokens(usage_tokens)
             logger.debug(f"... got response {message5}")
             tool_call = message5.tool_calls[0]
             self._latest_tool_call_id = tool_call.id
@@ -633,4 +688,55 @@ For example, explain the game rules, objectives, and optimal strategies.
 # TURN:
 Call exactly one action.
         """.format()
+        )
+
+class GPT5Nano(ReasoningLLM):
+    """An agent that uses GPT-5 Nano for fast, efficient ARC3 gameplay."""
+
+    MODEL = "gpt-5-nano"
+    MAX_ACTIONS = 80
+    REASONING_EFFORT = "minimal"
+    DO_OBSERVATION = True
+    MODEL_REQUIRES_TOOLS = True
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        logger.info(f"Initialized GPT-5 Nano agent for game {self.game_id}")
+
+    def build_user_prompt(self, latest_frame: FrameData) -> str:
+        """Enhanced prompt for GPT-5 Nano to maximize ARC3 performance."""
+        return textwrap.dedent(
+            """
+# MISSION:
+Discover rules and solve the game. Win by reaching a WIN state.
+Minimize total actions. Avoid GAME_OVER.
+
+# ENVIRONMENT:
+Grid size: {width}x{height}
+Score: {score} (indicates level progress)
+Turn: {turn}/{max_turns}
+
+# ACTION TOOLS:
+- RESET: Start over or begin level.
+- ACTION1: Move/Interace UP.
+- ACTION2: Move/Interface DOWN.
+- ACTION3: Move/Interface LEFT.
+- ACTION4: Move/Interface RIGHT.
+- ACTION5: Special action / Toggle.
+- ACTION6: Precision click (requires x, y).
+
+# TASK:
+1. Analyze the current grid for patterns, player position, goals, and obstacles.
+2. Formulate a hypothesis about the level's objective.
+3. Choose the optimal action to progress.
+
+# RESPONSE:
+Call exactly one tool. Be decisive.
+            """.format(
+                width=len(latest_frame.frame[0][0]) if latest_frame.frame else 0,
+                height=len(latest_frame.frame[0]) if latest_frame.frame else 0,
+                score=latest_frame.score,
+                turn=self.action_counter,
+                max_turns=self.MAX_ACTIONS,
+            )
         )
